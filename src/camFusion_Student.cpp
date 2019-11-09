@@ -140,6 +140,35 @@ void clusterKptMatchesWithROI(
     // ...
 }
 
+// get the median value of the input vector's elements (input function determines which members are used)
+template<class T>
+double median(
+    const std::vector<T>& input, std::function<double(const T& e1)>& extractVal)
+{
+    if (input.empty())
+    {
+        throw std::runtime_error("Can't compute median for empty vector");
+    }
+    std::vector<T> inputCopy(input.begin(), input.end());
+
+    const size_t n = inputCopy.size() / 2;
+    auto compFunction =
+        [&extractVal](const T& e1, const T& e2) {
+            return extractVal(e1) < extractVal(e2);
+        };
+    std::nth_element(inputCopy.begin(), inputCopy.begin() + n, inputCopy.end(), compFunction);
+    auto elemN = inputCopy[n];
+    if (inputCopy.size() % 2 == 1)
+    {
+        return extractVal(elemN);
+    }
+    else
+    {
+        std::nth_element(inputCopy.begin(), inputCopy.begin() + n - 1, inputCopy.end(), compFunction);
+        return 0.5 * (extractVal(elemN) + extractVal(inputCopy[n - 1]));
+    }
+}
+
 
 // Compute time-to-collision (TTC) based on keypoint correspondences in successive images
 void computeTTCCamera(
@@ -154,7 +183,21 @@ void computeTTCLidar(
     std::vector<LidarPoint>& lidarPointsPrev,
     std::vector<LidarPoint>& lidarPointsCurr, double frameRate, double& TTC)
 {
-    // ...
+    if (std::fabs(frameRate) < std::numeric_limits<double>::epsilon())
+    {
+        throw std::runtime_error("Frame rate must be greater than 0.0");
+    }
+
+    std::function<double(const LidarPoint&)> extractX = [](const LidarPoint& e1) {return e1.x;};
+    double prevMedianX = median(lidarPointsPrev, extractX);
+    double currMedianX = median(lidarPointsCurr, extractX);
+    double dt = 1 / frameRate;
+    double medianDiff = prevMedianX - currMedianX;
+    if (std::fabs(medianDiff) < std::numeric_limits<double>::epsilon())
+    {
+        throw std::runtime_error("Frame rate must be greater than 0.0");
+    }
+    TTC = currMedianX * dt / (medianDiff);
 }
 
 
