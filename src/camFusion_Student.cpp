@@ -184,19 +184,16 @@ void matchBoundingBoxes(
 
     for (const auto& bbMatch : bbMatches)
     {
-        unsigned int maxVal = 0;
-        int bestMatchIndex = 0;
-        for (const auto& bbMatchVal : bbMatch.second)
+        auto maxElement = std::max_element(bbMatch.second.begin(), bbMatch.second.end(),
+                [](const std::pair<unsigned int, unsigned int>& e1,
+                const std::pair<unsigned int, unsigned int>& e2) {
+                    return e1.second < e2.second;
+                });
+
+        if (maxElement != bbMatch.second.end() && maxElement->second > 0)
         {
-            if (bbMatchVal.second > maxVal)
-            {
-                maxVal = bbMatchVal.second;
-                bestMatchIndex = static_cast<int>(bbMatchVal.first);    // overflow won't happen in this project
-            }
-        }
-        if (maxVal > 0)
-        {
-            bbBestMatches.insert(std::make_pair(bbMatch.first, bestMatchIndex));
+            bbBestMatches.insert(std::make_pair(prevFrame.boundingBoxes.at(bbMatch.first).boxID,
+                currFrame.boundingBoxes.at(maxElement->first).boxID));
         }
     }
 }
