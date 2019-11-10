@@ -132,18 +132,47 @@ void show3DObjects(std::vector<BoundingBox>& boundingBoxes, cv::Size worldSize, 
 }
 
 
-// associate a given bounding box with the keypoints it contains
+//associate a given bounding box with the keypoints it contains
 void clusterKptMatchesWithROI(
     BoundingBox& boundingBox, std::vector<cv::KeyPoint>& kptsPrev,
     std::vector<cv::KeyPoint>& kptsCurr, std::vector<cv::DMatch>& kptMatches)
 {
-    // ...
+    std::vector<std::tuple<double, cv::KeyPoint, cv::DMatch>> tmpResults;
+
+    double mean = 0.0;
+    double variance = 0.0;
+    int numSamples = 0;
+    for (const auto& kptMatch : kptMatches)
+    {
+        auto ptCurr = kptsCurr.at(kptMatch.trainIdx);
+        if (boundingBox.roi.contains(ptCurr.pt))
+        {
+            auto ptPrev = kptsPrev.at(kptMatch.queryIdx);
+            double distance = cv::norm(ptCurr.pt - ptPrev.pt);
+            ++numSamples;
+            double meanUpdated = mean + (distance - mean) / static_cast<double>(numSamples);
+            variance += ((distance - mean) * (distance - meanUpdated) - variance) / numSamples;
+            mean = meanUpdated;
+
+            tmpResults.push_back(std::make_tuple(distance, ptCurr, kptMatch));
+        }
+    }
+    double stdDev = std::sqrt(variance);
+
+    for (const auto& tmpTuple : tmpResults)
+    {
+        if (std::get<0>(tmpTuple) < (mean + 0.8 * stdDev))
+        {
+            boundingBox.keypoints.push_back(std::get<1>(tmpTuple));
+            boundingBox.kptMatches.push_back(std::get<2>(tmpTuple));
+        }
+    }
 }
 
 // get the median value of the input vector's elements (input function determines which members are used)
 template<class T>
 double median(
-    const std::vector<T>& input, std::function<double(const T& e1)>& extractVal)
+    const std::vector<T>& input, const std::function<double(const T& e1)>& extractVal)
 {
     if (input.empty())
     {
@@ -175,7 +204,47 @@ void computeTTCCamera(
     std::vector<cv::KeyPoint>& kptsPrev, std::vector<cv::KeyPoint>& kptsCurr,
     std::vector<cv::DMatch> kptMatches, double frameRate, double& TTC, cv::Mat* visImg)
 {
-    // ...
+    vector<double> distRatios;
+    if (!kptMatches.empty())
+    {
+        for (auto it1 = kptMatches.begin(); it1 != kptMatches.end() - 1; ++it1)
+        {
+            cv::KeyPoint kpOuterCurr = kptsCurr.at(it1->trainIdx);
+            cv::KeyPoint kpOuterPrev = kptsPrev.at(it1->queryIdx);
+
+            for (auto it2 = kptMatches.begin() + 1; it2 != kptMatches.end(); ++it2)
+            {
+                double minDist = 100.0;
+                cv::KeyPoint kpInnerCurr = kptsCurr.at(it2->trainIdx);
+                cv::KeyPoint kpInnerPrev = kptsPrev.at(it2->queryIdx);
+
+                double distCurr = cv::norm(kpOuterCurr.pt - kpInnerCurr.pt);
+                double distPrev = cv::norm(kpOuterPrev.pt - kpInnerPrev.pt);
+
+                if (distPrev > std::numeric_limits<double>::epsilon() && distCurr >= minDist)
+                {
+                    double distRatio = distCurr / distPrev;
+                    distRatios.push_back(distRatio);
+                }
+            }
+        }
+    }
+
+    if (distRatios.empty())
+    {
+        TTC = NAN;
+        return;
+    }
+
+    std::function<double(const double& e)> extractVal = [](const double& e) {return e;};
+    double medDistRatio = median(distRatios, extractVal);
+    if (std::fabs(1 - medDistRatio) < std::numeric_limits<double>::epsilon())
+    {
+        TTC = NAN;
+        return;
+    }
+    double dT = 1 / frameRate;
+    TTC = -dT / (1 - medDistRatio);
 }
 
 
@@ -195,7 +264,8 @@ void computeTTCLidar(
     double medianDiff = prevMedianX - currMedianX;
     if (std::fabs(medianDiff) < std::numeric_limits<double>::epsilon())
     {
-        throw std::runtime_error("Frame rate must be greater than 0.0");
+        TTC = NAN;
+        return;
     }
     TTC = currMedianX * dt / (medianDiff);
 }
